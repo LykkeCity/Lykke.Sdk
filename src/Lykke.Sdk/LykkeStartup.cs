@@ -5,44 +5,76 @@ using Lykke.Common.ApiLibrary.Middleware;
 using Lykke.MonitoringServiceApiCaller;
 using Lykke.Sdk.Settings;
 using Lykke.SettingsReader;
+using Microsoft.ApplicationInsights.Extensibility;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Swashbuckle.AspNetCore.SwaggerGen;
 
 namespace Lykke.Sdk
 {
     [PublicAPI]
-    public static class LykkeApplicationBuilderExtensions
+    public abstract class LykkeStartup<TSettings> where TSettings : BaseAppSettings
     {
         /// <summary>
-        /// Configure Lykke service.
+        /// Configure additional pipeline interceptors
         /// </summary>
-        /// <param name="app"></param>
-        public static void UseLykkeConfiguration(this IApplicationBuilder app)
+        protected virtual void ConfigureRequestPipeline(IApplicationBuilder app)
         {
-            app.UseLykkeConfiguration(null);
         }
 
         /// <summary>
-        /// Configure Lykke service.
+        /// Configure application's API title and Logs settings
         /// </summary>
-        /// <param name="app">IApplicationBuilder implementation.</param>
-        /// <param name="configureOptions">Configuration handler for <see cref="LykkeConfigurationOptions"/></param>
-        public static void UseLykkeConfiguration(this IApplicationBuilder app, Action<LykkeConfigurationOptions> configureOptions)
+        protected virtual void BuildServiceProvilder(LykkeServiceOptions<TSettings> options)
         {
-            if (app == null)
-                throw new ArgumentNullException("app");
+            options.ApiTitle = ApiTitle;
+            options.Logs = (AzureLogTable, GetLogsConnectionString);
+        }
 
-            var options = new LykkeConfigurationOptions();
-            configureOptions?.Invoke(options);
+        /// <summary>
+        /// Returns the api title used on the swagger page
+        /// </summary>
+        public abstract string ApiTitle { get; }
 
+        /// <summary>
+        /// The table name for the logs of that service
+        /// </summary>
+        public abstract string AzureLogTable { get; }
+
+        /// <summary>
+        /// Returns the logs connection string from a passed settings instance
+        /// </summary>
+        protected abstract string GetLogsConnectionString(TSettings settings);
+
+        /// <summary>
+        /// Configure additional swagger options here (e.g. custom filters)
+        /// </summary>
+        protected virtual void ConfigureSwagger(SwaggerGenOptions swagger) {}
+
+        public IServiceProvider ConfigureServices(IServiceCollection services)
+        {
+            return services.BuildServiceProvider<TSettings>(
+                BuildServiceProvilder,
+                ConfigureSwagger);
+        }
+
+        public void Configure(IApplicationBuilder app)
+        {
             var env = app.ApplicationServices.GetService<IHostingEnvironment>();
 
             if (env.IsDevelopment())
             {
                 app.UseDeveloperExceptionPage();
             }
+            else
+            {
+                var appName = System.Reflection.Assembly.GetEntryAssembly().GetName().Name;
+                app.UseLykkeMiddleware(appName, TransformErrorToResponseObject);
+            }
+
+            app.UseLykkeForwardedHeaders();
 
             var log = app.ApplicationServices.GetService<ILog>();
 
@@ -54,10 +86,12 @@ namespace Lykke.Sdk
                 if (configurationRoot == null)
                     throw new ApplicationException("Configuration root must be registered in the container");
 
-                var monitoringSettings = app.ApplicationServices.GetService<IReloadingManager<MonitoringServiceClientSettings>>();
-                
+                var monitoringSettings = app
+                    .ApplicationServices
+                    .GetService<IReloadingManager<MonitoringServiceClientSettings>>();
+
                 var startupManager = app.ApplicationServices.GetService<IStartupManager>();
-                var shutdownManager = app.ApplicationServices.GetService<IShutdownManager>();                
+                var shutdownManager = app.ApplicationServices.GetService<IShutdownManager>();
                 var hostingEnvironment = app.ApplicationServices.GetService<IHostingEnvironment>();
 
                 appLifetime.ApplicationStarted.Register(() =>
@@ -73,7 +107,11 @@ namespace Lykke.Sdk
                             if (monitoringSettings?.CurrentValue == null)
                                 throw new ApplicationException("Monitoring settings is not provided.");
 
-                            AutoRegistrationInMonitoring.RegisterAsync(configurationRoot, monitoringSettings.CurrentValue.MonitoringServiceUrl, log).GetAwaiter().GetResult();
+                            AutoRegistrationInMonitoring.RegisterAsync(
+                                    configurationRoot,
+                                    monitoringSettings.CurrentValue.MonitoringServiceUrl, log)
+                                .GetAwaiter()
+                                .GetResult();
                         }
 
                     }
@@ -98,10 +136,7 @@ namespace Lykke.Sdk
                     }
                 });
 
-                var appName = System.Reflection.Assembly.GetEntryAssembly().GetName().Name;
-
-                app.UseLykkeMiddleware(appName, options.DefaultErrorHandler);
-                app.UseLykkeForwardedHeaders();
+                ConfigureRequestPipeline(app);
 
                 app.UseStaticFiles();
                 app.UseMvc();
@@ -121,6 +156,16 @@ namespace Lykke.Sdk
                 log?.WriteFatalError("Startup", "", ex);
                 throw;
             }
+
+            if (env.IsDevelopment())
+            {
+                TelemetryConfiguration.Active.DisableTelemetry = true;
+            }
         }
-    }    
+
+        protected virtual object TransformErrorToResponseObject(Exception ex)
+        {
+            return new { message = "Technical error" };
+        }
+    }
 }
