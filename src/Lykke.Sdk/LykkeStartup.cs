@@ -5,6 +5,7 @@ using Lykke.Common.ApiLibrary.Middleware;
 using Lykke.MonitoringServiceApiCaller;
 using Lykke.Sdk.Settings;
 using Lykke.SettingsReader;
+using Microsoft.ApplicationInsights.Extensibility;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
@@ -19,15 +20,36 @@ namespace Lykke.Sdk
         /// <summary>
         /// Configure additional pipeline interceptors
         /// </summary>
-        protected virtual void ConfigureRequestPipeline(IApplicationBuilder app) {}
+        protected virtual void ConfigureRequestPipeline(IApplicationBuilder app)
+        {
+        }
 
         /// <summary>
         /// Configure application's API title and Logs settings
         /// </summary>
-        protected abstract void BuildServiceProvilder(LykkeServiceOptions<TSettings> options);
+        protected virtual void BuildServiceProvilder(LykkeServiceOptions<TSettings> options)
+        {
+            options.ApiTitle = ApiTitle;
+            options.Logs = (AzureLogTable, GetLogsConnectionString);
+        }
 
         /// <summary>
-        /// Configure additional swagger options here (custom filters, etc)
+        /// Returns the api title used on the swagger page
+        /// </summary>
+        public abstract string ApiTitle { get; }
+
+        /// <summary>
+        /// The table name for the logs of that service
+        /// </summary>
+        public abstract string AzureLogTable { get; }
+
+        /// <summary>
+        /// Returns the logs connection string from a passed settings instance
+        /// </summary>
+        protected abstract string GetLogsConnectionString(TSettings settings);
+
+        /// <summary>
+        /// Configure additional swagger options here (e.g. custom filters)
         /// </summary>
         protected virtual void ConfigureSwagger(SwaggerGenOptions swagger) {}
 
@@ -133,6 +155,11 @@ namespace Lykke.Sdk
             {
                 log?.WriteFatalError("Startup", "", ex);
                 throw;
+            }
+
+            if (env.IsDevelopment())
+            {
+                TelemetryConfiguration.Active.DisableTelemetry = true;
             }
         }
     }
