@@ -9,33 +9,38 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Swashbuckle.AspNetCore.SwaggerGen;
 
 namespace Lykke.Sdk
 {
     [PublicAPI]
-    public static class LykkeApplicationBuilderExtensions
+    public abstract class LykkeStartup<TSettings> where TSettings : BaseAppSettings
     {
         /// <summary>
-        /// Configure Lykke service.
+        /// Configure additional pipeline interceptors
         /// </summary>
-        /// <param name="app"></param>
-        public static void UseLykkeConfiguration(this IApplicationBuilder app)
-        {
-            app.UseLykkeConfiguration(null);
-        }
+        protected virtual void ConfigureRequestPipeline(IApplicationBuilder app) {}
 
         /// <summary>
-        /// Configure Lykke service.
+        /// Configure application's API title and Logs settings
         /// </summary>
-        /// <param name="app">IApplicationBuilder implementation.</param>
-        /// <param name="configureOptions">Configuration handler for <see cref="LykkeConfigurationOptions"/></param>
-        public static void UseLykkeConfiguration(this IApplicationBuilder app, Action<LykkeConfigurationOptions> configureOptions)
-        {
-            if (app == null)
-                throw new ArgumentNullException("app");
+        protected abstract void BuildServiceProvilder(LykkeServiceOptions<TSettings> options);
 
+        /// <summary>
+        /// Configure additional swagger options here (custom filters, etc)
+        /// </summary>
+        protected virtual void ConfigureSwagger(SwaggerGenOptions swagger) {}
+
+        public IServiceProvider ConfigureServices(IServiceCollection services)
+        {
+            return services.BuildServiceProvider<TSettings>(
+                BuildServiceProvilder,
+                ConfigureSwagger);
+        }
+
+        public void Configure(IApplicationBuilder app)
+        {
             var options = new LykkeConfigurationOptions();
-            configureOptions?.Invoke(options);
 
             var env = app.ApplicationServices.GetService<IHostingEnvironment>();
 
@@ -54,10 +59,12 @@ namespace Lykke.Sdk
                 if (configurationRoot == null)
                     throw new ApplicationException("Configuration root must be registered in the container");
 
-                var monitoringSettings = app.ApplicationServices.GetService<IReloadingManager<MonitoringServiceClientSettings>>();
-                
+                var monitoringSettings = app
+                    .ApplicationServices
+                    .GetService<IReloadingManager<MonitoringServiceClientSettings>>();
+
                 var startupManager = app.ApplicationServices.GetService<IStartupManager>();
-                var shutdownManager = app.ApplicationServices.GetService<IShutdownManager>();                
+                var shutdownManager = app.ApplicationServices.GetService<IShutdownManager>();
                 var hostingEnvironment = app.ApplicationServices.GetService<IHostingEnvironment>();
 
                 appLifetime.ApplicationStarted.Register(() =>
@@ -73,7 +80,11 @@ namespace Lykke.Sdk
                             if (monitoringSettings?.CurrentValue == null)
                                 throw new ApplicationException("Monitoring settings is not provided.");
 
-                            AutoRegistrationInMonitoring.RegisterAsync(configurationRoot, monitoringSettings.CurrentValue.MonitoringServiceUrl, log).GetAwaiter().GetResult();
+                            AutoRegistrationInMonitoring.RegisterAsync(
+                                    configurationRoot,
+                                    monitoringSettings.CurrentValue.MonitoringServiceUrl, log)
+                                .GetAwaiter()
+                                .GetResult();
                         }
 
                     }
@@ -103,6 +114,8 @@ namespace Lykke.Sdk
                 app.UseLykkeMiddleware(appName, options.DefaultErrorHandler);
                 app.UseLykkeForwardedHeaders();
 
+                ConfigureRequestPipeline(app);
+
                 app.UseStaticFiles();
                 app.UseMvc();
 
@@ -122,5 +135,5 @@ namespace Lykke.Sdk
                 throw;
             }
         }
-    }    
+    }
 }
