@@ -62,14 +62,19 @@ namespace Lykke.Sdk
 
         public void Configure(IApplicationBuilder app)
         {
-            var options = new LykkeConfigurationOptions();
-
             var env = app.ApplicationServices.GetService<IHostingEnvironment>();
 
             if (env.IsDevelopment())
             {
                 app.UseDeveloperExceptionPage();
             }
+            else
+            {
+                var appName = System.Reflection.Assembly.GetEntryAssembly().GetName().Name;
+                app.UseLykkeMiddleware(appName, TransformErrorToResponseObject);
+            }
+
+            app.UseLykkeForwardedHeaders();
 
             var log = app.ApplicationServices.GetService<ILog>();
 
@@ -131,11 +136,6 @@ namespace Lykke.Sdk
                     }
                 });
 
-                var appName = System.Reflection.Assembly.GetEntryAssembly().GetName().Name;
-
-                app.UseLykkeMiddleware(appName, options.DefaultErrorHandler);
-                app.UseLykkeForwardedHeaders();
-
                 ConfigureRequestPipeline(app);
 
                 app.UseStaticFiles();
@@ -161,6 +161,11 @@ namespace Lykke.Sdk
             {
                 TelemetryConfiguration.Active.DisableTelemetry = true;
             }
+        }
+
+        protected virtual object TransformErrorToResponseObject(Exception ex)
+        {
+            return new { message = "Technical error" };
         }
     }
 }
