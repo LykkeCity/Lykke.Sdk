@@ -1,10 +1,10 @@
-﻿using Lykke.Common;
+﻿using System.Linq;
+using System.Net;
+using Lykke.Common;
 using Lykke.Common.Api.Contract.Responses;
 using Lykke.Sdk.Health;
 using Microsoft.AspNetCore.Mvc;
 using Swashbuckle.AspNetCore.Annotations;
-using System.Linq;
-using System.Net;
 
 namespace Lykke.Sdk.Controllers
 {

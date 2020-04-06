@@ -49,12 +49,14 @@ namespace Lykke.Sdk
         [CanBeNull]
         public Action<IServiceCollection, IReloadingManager<TAppSettings>> Extend { get; set; }
 
+#if (NETSTANDARD2_0 || NETSTANDARD2_1)
         /// <summary>
         ///  Register additional AutoFac modules. Optional.
         /// </summary>
         [CanBeNull]
         public Action<IModuleRegistration> RegisterAdditionalModules { get; set; }
-        
+#endif
+
         /// <summary>
         ///  Extends mvc options. Optional.
         /// </summary>
