@@ -1,4 +1,4 @@
-﻿using Autofac;
+﻿using System;
 using Common.Log;
 using JetBrains.Annotations;
 using Lykke.Common.Log;
@@ -7,7 +7,6 @@ using Lykke.Sdk.Settings;
 using Lykke.SettingsReader;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
-using System;
 
 namespace Lykke.Sdk
 {
@@ -89,13 +88,11 @@ namespace Lykke.Sdk
             }
         }
 
-        public void HandleStopped(IContainer container)
+        public void HandleStopped()
         {
             try
             {
                 _healthNotifier.Notify("Application is being terminated");
-
-                container.Dispose();
             }
             catch (Exception ex)
             {

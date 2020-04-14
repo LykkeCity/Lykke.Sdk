@@ -9,14 +9,15 @@ using Lykke.Common;
 using Lykke.Common.ApiLibrary.Swagger;
 using Lykke.Logs;
 using Lykke.Sdk.ActionFilters;
+using Lykke.Sdk.Controllers;
 using Lykke.Sdk.Health;
 using Lykke.Sdk.Settings;
 using Lykke.SettingsReader;
-using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.OpenApi.Models;
 using Newtonsoft.Json.Converters;
-using Swashbuckle.AspNetCore.Swagger;
+using Newtonsoft.Json.Serialization;
 
 namespace Lykke.Sdk
 {
@@ -29,7 +30,13 @@ namespace Lykke.Sdk
         /// <summary>
         /// Build service provider for Lykke's service.
         /// </summary>
+#if (NETCOREAPP3_0 || NETCOREAPP3_1)
+        public static (IConfigurationRoot, IReloadingManager<TAppSettings>) BuildServiceProvider<TAppSettings>(
+#elif NETSTANDARD2_0
         public static IServiceProvider BuildServiceProvider<TAppSettings>(
+#else
+#error unknown target framework
+#endif
             this IServiceCollection services,
             Action<LykkeServiceOptions<TAppSettings>> buildServiceOptions)
 
@@ -59,7 +66,28 @@ namespace Lykke.Sdk
                 throw new ArgumentException("Logs configuration delegate must be provided.");
             }
 
-            var mvc = services.AddMvc(options =>
+            if (!LykkeStarter.IsDebug)
+                services.AddApplicationInsightsTelemetry();
+
+            var mvc = services
+#if (NETCOREAPP3_0 || NETCOREAPP3_1)
+                .AddControllers(options =>
+                {
+                    if (!serviceOptions.HaveToDisableValidationFilter)
+                    {
+                        options.Filters.Add(new ActionValidationFilter());
+                    }
+
+                    serviceOptions.ConfigureMvcOptions?.Invoke(options);
+                })
+                .AddNewtonsoftJson(options =>
+                {
+                    options.SerializerSettings.ContractResolver = new DefaultContractResolver();
+                    options.SerializerSettings.Converters.Add(new StringEnumConverter());
+                })
+                .AddApplicationPart(typeof(IsAliveController).Assembly)
+#elif NETSTANDARD2_0
+                .AddMvc(options =>
                 {
                     if (!serviceOptions.HaveToDisableValidationFilter)
                     {
@@ -74,6 +102,9 @@ namespace Lykke.Sdk
                     options.SerializerSettings.ContractResolver =
                         new Newtonsoft.Json.Serialization.DefaultContractResolver();
                 })
+#else
+#error unknown target framework
+#endif
                 .ConfigureApplicationPartManager(partsManager =>
                 {
                     serviceOptions.ConfigureApplicationParts?.Invoke(partsManager);
@@ -102,14 +133,14 @@ namespace Lykke.Sdk
                     {
                         options.SwaggerDoc(
                             $"{swaggerVersion.ApiVersion}",
-                            new Info
+                            new OpenApiInfo
                             {
                                 Version = swaggerVersion.ApiVersion ?? throw new ArgumentNullException($"{nameof(serviceOptions.AdditionalSwaggerOptions)}.{nameof(LykkeSwaggerOptions.ApiVersion)}"),
                                 Title = swaggerVersion.ApiTitle ?? throw new ArgumentNullException($"{nameof(serviceOptions.AdditionalSwaggerOptions)}.{nameof(LykkeSwaggerOptions.ApiTitle)}")
                             });
                     }
                 }
-                
+
                 serviceOptions.Swagger?.Invoke(options);
             });
 
@@ -143,7 +174,7 @@ namespace Lykke.Sdk
                 {
                     throw new ArgumentException("Logs.AzureTableConnectionStringResolver must be provided");
                 }
-                
+
                 if (settings.CurrentValue.SlackNotifications == null)
                 {
                     throw new ArgumentException("SlackNotifications settings section should be specified, when Lykke logging is enabled");
@@ -160,27 +191,48 @@ namespace Lykke.Sdk
                         options => { loggingOptions.Extended?.Invoke(options); });
             }
 
-            var builder = new ContainerBuilder();
-
             serviceOptions.Extend?.Invoke(services, settings);
-
-            builder.RegisterInstance(configurationRoot).As<IConfigurationRoot>();
 
             if (settings.CurrentValue.MonitoringServiceClient == null)
             {
                 throw new InvalidOperationException("MonitoringServiceClient config section is required");
             }
 
+#if (NETCOREAPP3_0 || NETCOREAPP3_1)
+            return (configurationRoot, settings);
+#elif NETSTANDARD2_0
+            var builder = new ContainerBuilder();
+            builder.Populate(services);
+
+            builder.ConfigureLykkeContainer(
+                configurationRoot,
+                settings,
+                serviceOptions.RegisterAdditionalModules);
+
+            var container = builder.Build();
+
+            return new AutofacServiceProvider(container);
+#else
+#error unknown target framework
+#endif
+        }
+
+        public static void ConfigureLykkeContainer<TAppSettings>(
+            this ContainerBuilder builder,
+            IConfigurationRoot configurationRoot,
+            IReloadingManager<TAppSettings> settings,
+            Action<IModuleRegistration> registerAdditionalModules = null)
+            where TAppSettings : class, IAppSettings
+        {
+            builder.RegisterInstance(configurationRoot).As<IConfigurationRoot>();
             builder.RegisterInstance(settings.Nested(x => x.MonitoringServiceClient))
                 .As<IReloadingManager<MonitoringServiceClientSettings>>();
 
-            builder.RegisterInstance(serviceOptions);
             builder.RegisterType<AppLifetimeHandler>()
                 .AsSelf()
                 .SingleInstance();
 
-            builder.Populate(services);
-            builder.RegisterAssemblyModules(settings, serviceOptions.RegisterAdditionalModules, Assembly.GetEntryAssembly());
+            builder.RegisterAssemblyModules(settings, registerAdditionalModules, Assembly.GetEntryAssembly());
 
             builder.RegisterType<EmptyStartupManager>()
                 .As<IStartupManager>()
@@ -196,26 +248,6 @@ namespace Lykke.Sdk
                 .As<IHealthService>()
                 .SingleInstance()
                 .IfNotRegistered(typeof(IHealthService));
-
-            var container = builder.Build();
-
-            var appLifetime = container.Resolve<IApplicationLifetime>();
-
-            appLifetime.ApplicationStarted.Register(() =>
-            {
-                try
-                {
-                    container.Resolve<AppLifetimeHandler>().HandleStarted();
-                }
-                catch (Exception)
-                {
-                    appLifetime.StopApplication();
-                }
-            });
-            appLifetime.ApplicationStopping.Register(container.Resolve<AppLifetimeHandler>().HandleStopping);
-            appLifetime.ApplicationStopped.Register(() => container.Resolve<AppLifetimeHandler>().HandleStopped(container));
-
-            return new AutofacServiceProvider(container);
         }
     }
 }

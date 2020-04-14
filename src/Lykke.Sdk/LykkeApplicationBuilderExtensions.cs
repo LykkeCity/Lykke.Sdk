@@ -1,5 +1,7 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Linq;
+using Autofac;
 using JetBrains.Annotations;
 using Lykke.Common.ApiLibrary.Middleware;
 using Lykke.Common.Log;
@@ -7,6 +9,7 @@ using Lykke.Sdk.Middleware;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.OpenApi.Models;
 
 namespace Lykke.Sdk
 {
@@ -20,15 +23,18 @@ namespace Lykke.Sdk
         /// Configure Lykke service.
         /// </summary>
         /// <param name="app"></param>
-        public static IApplicationBuilder UseLykkeConfiguration(this IApplicationBuilder app)
-            => app.UseLykkeConfiguration(null);
+        public static IApplicationBuilder UseLykkeConfiguration(this IApplicationBuilder app, IApplicationLifetime appLifetime)
+            => app.UseLykkeConfiguration(appLifetime, null);
 
         /// <summary>
         /// Configure Lykke service.
         /// </summary>
         /// <param name="app">IApplicationBuilder implementation.</param>
         /// <param name="configureOptions">Configuration handler for <see cref="LykkeConfigurationOptions"/></param>
-        public static IApplicationBuilder UseLykkeConfiguration(this IApplicationBuilder app, Action<LykkeConfigurationOptions> configureOptions)
+        public static IApplicationBuilder UseLykkeConfiguration(
+            this IApplicationBuilder app,
+            IApplicationLifetime appLifetime,
+            Action<LykkeConfigurationOptions> configureOptions)
         {
             if (app == null)
             {
@@ -67,11 +73,23 @@ namespace Lykke.Sdk
                 options.WithMiddleware?.Invoke(app);
 
                 app.UseStaticFiles();
+#if (NETCOREAPP3_0 || NETCOREAPP3_1)
+                app.UseRouting();
+                app.UseEndpoints(endpoints => {
+                    endpoints.MapControllers();
+                });
+#elif NETSTANDARD2_0
                 app.UseMvc();
+#else
+#error unknown target framework
+#endif
 
                 app.UseSwagger(c =>
                 {
-                    c.PreSerializeFilters.Add((swagger, httpReq) => swagger.Host = httpReq.Host.Value);
+                    c.PreSerializeFilters.Add((swagger, httpReq) =>
+                    {
+                        swagger.Servers = new List<OpenApiServer> { new OpenApiServer { Url = $"{httpReq.Scheme}://{httpReq.Host.Value}" } };
+                    });
                 });
                 app.UseSwaggerUI(x =>
                 {
@@ -91,8 +109,30 @@ namespace Lykke.Sdk
 
                     if (!string.IsNullOrWhiteSpace(options.SwaggerOptions.ApiTitle))
                     {
-                        x.DocumentTitle(options.SwaggerOptions.ApiTitle);
+                        x.DocumentTitle = options.SwaggerOptions.ApiTitle;
                     }
+                });
+
+                appLifetime.ApplicationStarted.Register(() =>
+                {
+                    try
+                    {
+#if (NETCOREAPP3_0 || NETCOREAPP3_1)
+                        Console.WriteLine($"Hosting environment: {env.EnvironmentName}");
+                        Console.WriteLine($"Content root path: {env.ContentRootPath}");
+                        Console.WriteLine($"Now listening on: http://[::]:{LykkeStarter.Port}");
+#endif
+                        app.ApplicationServices.GetService<AppLifetimeHandler>().HandleStarted();
+                    }
+                    catch (Exception)
+                    {
+                        appLifetime.StopApplication();
+                    }
+                });
+                appLifetime.ApplicationStopping.Register(app.ApplicationServices.GetService<AppLifetimeHandler>().HandleStopping);
+                appLifetime.ApplicationStopped.Register(() =>
+                {
+                    app.ApplicationServices.GetService<AppLifetimeHandler>().HandleStopped();
                 });
             }
             catch (Exception ex)

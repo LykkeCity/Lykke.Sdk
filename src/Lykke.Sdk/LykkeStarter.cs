@@ -1,8 +1,11 @@
-﻿using JetBrains.Annotations;
+﻿using System;
+using System.IO;
+using System.Threading.Tasks;
+using Autofac.Extensions.DependencyInjection;
+using JetBrains.Annotations;
 using Lykke.Common;
 using Microsoft.AspNetCore.Hosting;
-using System;
-using System.Threading.Tasks;
+using Microsoft.Extensions.Hosting;
 
 namespace Lykke.Sdk
 {
@@ -13,18 +16,12 @@ namespace Lykke.Sdk
     public static class LykkeStarter
     {
         private static object _locker = new object();
-        private static IWebHostFactory _webHostBuilderFactory = new WebHostFactory();
 
         /// <summary>DEBUG/RELEASE mode flag.</summary>
         public static bool IsDebug { get; private set; }
 
-        /// <summary>WebHostFactory for creating IWebHostBuilder.</summary>
-        public static IWebHostFactory WebHostFactory
-        {
-            get => _webHostBuilderFactory;
-            set => _webHostBuilderFactory =
-                    value ?? throw new ArgumentNullException($"{nameof(WebHostFactory)} can't be null");
-        }
+        /// <summary>Port for listening.</summary>
+        public static int Port { get; private set; }
 
         /// <summary>Starts the service.</summary>
         /// <typeparam name="TStartup">The type of the startup.</typeparam>
@@ -43,6 +40,7 @@ namespace Lykke.Sdk
             where TStartup : class
         {
             IsDebug = isDebug;
+            Port = port;
 
             Console.WriteLine($@"{AppEnvironment.Name} version {AppEnvironment.Version}");
             Console.WriteLine(isDebug ? "DEBUG mode" : "RELEASE mode");
@@ -50,16 +48,32 @@ namespace Lykke.Sdk
 
             try
             {
-                var hostBuilder = _webHostBuilderFactory
-                    .CreateWebHostBuilder<TStartup>(options =>
-                {
-                    options.Port = port;
-                    options.IsDebug = isDebug;
-                });
-
-                var host = hostBuilder.Build();
-
+#if (NETCOREAPP3_0 || NETCOREAPP3_1)
+                var host = Host.CreateDefaultBuilder()
+                    .UseContentRoot(Directory.GetCurrentDirectory())
+                    .UseServiceProviderFactory(new AutofacServiceProviderFactory())
+                    .ConfigureWebHostDefaults(webBuilder =>
+                    {
+                        webBuilder.ConfigureKestrel(serverOptions =>
+                        {
+                            // Set properties and call methods on options
+                        })
+                        .UseUrls($"http://*:{port}")
+                        .UseStartup<TStartup>();
+                    })
+                    .Build();
                 await host.RunAsync();
+#elif NETSTANDARD2_0
+                var host = new WebHostBuilder()
+                    .UseKestrel()
+                    .UseUrls($"http://*:{port}")
+                    .UseContentRoot(Directory.GetCurrentDirectory())
+                    .UseStartup<TStartup>()
+                    .Build();
+                await host.RunAsync();
+#else
+#error unknown target framework
+#endif
             }
             catch (Exception ex)
             {

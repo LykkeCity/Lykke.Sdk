@@ -34,14 +34,17 @@ namespace Lykke.Sdk.Middleware
         /// <param name="getMode">The maintenance mode getter.</param>
         /// <param name="checkPeriod">The interval to check the settings</param>
         /// <returns>the builder</returns>
-        public static IApplicationBuilder UseMaintenanceMode<TAppSettings>(this IApplicationBuilder builder, Func<TAppSettings, MaintenanceMode> getMode, TimeSpan checkPeriod)
+        public static IApplicationBuilder UseMaintenanceMode<TAppSettings>(
+            this IApplicationBuilder builder,
+            Func<TAppSettings, MaintenanceMode> getMode,
+            TimeSpan checkPeriod)
             where TAppSettings : class
         {
             if (getMode == null)
                 throw new ArgumentNullException(nameof(getMode));
 
             var configRoot = builder.ApplicationServices.GetRequiredService<IConfigurationRoot>();
-            var settings = configRoot.LoadSettings<TAppSettings>();
+            var settings = configRoot.LoadSettings<TAppSettings>(_ => { });
 
             return builder.UseMiddleware<MaintenanceModeMiddleware<TAppSettings>>(settings, getMode, checkPeriod);
         }
